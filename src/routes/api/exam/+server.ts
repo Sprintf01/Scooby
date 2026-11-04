@@ -3,14 +3,14 @@ import type { RequestHandler } from './$types';
 import * as XLSX from 'xlsx';
 import type { Exam } from '$lib/types';
 
-// Import data files from mid-sem folder
-const dataFiles = import.meta.glob('$lib/data/mid-sem-2026-spring/*.{xlsx,xls}', { query: '?url', import: 'default', eager: true });
+// Import data files from the current exam folder
+const dataFiles = import.meta.glob('$lib/data/end-sem-2026-monsoon/*.{xlsx,xls}', { query: '?url', import: 'default', eager: true });
 
 export const GET: RequestHandler = async ({ fetch }) => {
     try {
         const filePaths = Object.keys(dataFiles);
         if (filePaths.length === 0) {
-            return json({ error: 'No exam timetable file found in src/lib/data/mid-sem-2026-spring/' }, { status: 404 });
+            return json({ error: 'No exam timetable file found in src/lib/data/end-sem-2026-monsoon/' }, { status: 404 });
         }
 
         // Filter out temp files (starting with ~$)
@@ -149,7 +149,9 @@ function parseExamTimetable(worksheet: XLSX.WorkSheet): Exam[] {
             
             if (cellValue && typeof cellValue === 'string' && cellValue.trim()) {
                 const courseCode = cellValue.trim();
-                
+                // Sheet sometimes lists the same code twice in one slot
+                if (exams.some(e => e.courseCode === courseCode && e.date === colInfo.date && e.slot === colInfo.slot)) continue;
+
                 exams.push({
                     courseCode,
                     date: colInfo.date,

@@ -1,9 +1,13 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import type { Exam } from "$lib/types";
+	import type { Course, Exam } from "$lib/types";
 	import { toPng } from "html-to-image";
 	import { createEvents } from "ics";
 	import type { EventAttributes } from "ics";
+	import { myCourseCodes, readSavedTimetable, timetableCodes, examsForCodes } from "$lib/examImport";
+
+	// Not "scooby_*": the timetable manager sweeps every scooby_ key that isn't its own version.
+	const SELECTED_KEY = "exams_endsem_monsoon26_selected";
 
 	let loading = $state(true);
 	let error = $state("");
@@ -11,6 +15,11 @@
 	let selectedExams = $state<Exam[]>([]);
 	let searchInput = $state("");
 	let searchInputRef: HTMLInputElement | null = $state(null);
+	// Exams for the courses saved in the timetable manager
+	let timetableExams = $state<Exam[]>([]);
+	let importOffer = $derived(timetableExams.filter((e) => !isSelected(e)));
+	// Asked on every open, and again whenever the list goes empty; the header button reopens it
+	let importOpen = $state(false);
 
 	// Get unique course codes for search
 	let allCourseCodes = $derived(() => {
@@ -48,6 +57,7 @@
 			searchInputRef?.focus();
 		}
 		if (e.key === "Escape") {
+			importOpen = false;
 			searchInput = "";
 			searchInputRef?.blur();
 		}
@@ -58,7 +68,7 @@
 
 		// Restore state from localStorage
 		try {
-			const savedSelected = localStorage.getItem("scooby_midsem_selected");
+			const savedSelected = localStorage.getItem(SELECTED_KEY);
 			if (savedSelected) {
 				selectedExams = JSON.parse(savedSelected);
 			}
@@ -66,15 +76,25 @@
 			console.error("Failed to restore state", e);
 		}
 
+		// Batch courses aren't saved by the timetable manager, they're derived
+		// from the course sheet, so we need it too. Optional: import just won't show.
+		const coursesReq = fetch("/api/timetable?v=2")
+			.then((r) => r.json())
+			.then((d) => (d.courses ?? []) as Course[])
+			.catch(() => [] as Course[]);
+
 		try {
 			// Add timestamp to prevent caching
-			const response = await fetch(`/api/midsem?t=21022026}`);
+			const response = await fetch(`/api/exam?t=04112026`);
 			const data = await response.json();
 
 			if (data.error) {
 				error = data.error;
 			} else {
 				allExams = data.exams;
+				const codes = myCourseCodes(await coursesReq, readSavedTimetable(localStorage));
+				timetableExams = examsForCodes(timetableCodes(codes), allExams);
+				importOpen = importOffer.length > 0;
 			}
 		} catch (e) {
 			error = "Failed to load exam timetable data";
@@ -87,7 +107,7 @@
 	$effect(() => {
 		if (selectedExams.length >= 0) {
 			localStorage.setItem(
-				"scooby_midsem_selected",
+				SELECTED_KEY,
 				JSON.stringify(selectedExams)
 			);
 		}
@@ -100,10 +120,20 @@
 		searchInput = "";
 	}
 
+	function answerImport(accept: boolean) {
+		if (accept) selectedExams = [...selectedExams, ...importOffer];
+		importOpen = false;
+	}
+
+	function askIfEmpty() {
+		if (selectedExams.length === 0 && importOffer.length > 0) importOpen = true;
+	}
+
 	function removeExam(exam: Exam) {
 		selectedExams = selectedExams.filter(
 			(e) => !(e.courseCode === exam.courseCode && e.day === exam.day && e.time === exam.time)
 		);
+		askIfEmpty();
 	}
 
 	function isSelected(exam: Exam): boolean {
@@ -127,7 +157,8 @@
 	function reset() {
 		selectedExams = [];
 		searchInput = "";
-		localStorage.removeItem("scooby_midsem_selected");
+		localStorage.removeItem(SELECTED_KEY);
+		askIfEmpty();
 	}
 
 	async function downloadImage() {
@@ -138,7 +169,7 @@
 			const dataUrl = await toPng(node, { backgroundColor: "#08080a" });
 			const link = document.createElement("a");
 			link.href = dataUrl;
-			link.download = "midsem-exams.png";
+			link.download = "endsem-exams.png";
 			document.body.appendChild(link);
 			link.click();
 			setTimeout(() => document.body.removeChild(link), 100);
@@ -182,7 +213,7 @@
 
 		selectedExams.forEach((exam) => {
 			const examDate = parseDateStr(exam.date);
-			const [hours, minutes] = exam.slot === 'morning' ? [9, 30] : [15, 0];
+			const [hours, minutes] = exam.slot === 'morning' ? [9, 0] : [14, 0];
 
 			events.push({
 				title: `Exam: ${exam.courseCode}`,
@@ -193,8 +224,8 @@
 					hours,
 					minutes
 				],
-				duration: { hours: 2, minutes: 0 },
-				description: `Mid-Semester Examination for ${exam.courseCode}`,
+				duration: { hours: 3, minutes: 0 }, // ponytail: end-sem slots assumed 3h; sheet has no end times
+				description: `End-Semester Examination for ${exam.courseCode}`,
 				location: 'Examination Hall',
 				status: 'CONFIRMED',
 				busyStatus: 'BUSY'
@@ -211,7 +242,7 @@
 		const blob = new Blob([value], { type: 'text/calendar' });
 		const link = document.createElement('a');
 		link.href = URL.createObjectURL(blob);
-		link.download = 'midsem-exams.ics';
+		link.download = 'endsem-exams.ics';
 		document.body.appendChild(link);
 		link.click();
 		setTimeout(() => {
@@ -236,7 +267,7 @@
 	interface TimeSlot {
 		hour: number;
 		label: string;
-		isExamSlot: boolean; // 9:30 AM or 3:00 PM
+		isExamSlot: boolean; // 9:00 AM or 2:00 PM
 		slotType: "morning" | "afternoon" | null;
 	}
 
@@ -246,13 +277,13 @@
 		for (let hour = 9; hour <= 16; hour++) {
 			const h = hour % 12 || 12;
 			const ampm = hour < 12 ? 'AM' : 'PM';
-			const isExamSlot = hour === 9 || hour === 15;
+			const isExamSlot = hour === 9 || hour === 14;
 			let slotType: "morning" | "afternoon" | null = null;
 			if (hour === 9) slotType = 'morning';
-			if (hour === 15) slotType = 'afternoon';
+			if (hour === 14) slotType = 'afternoon';
 			slots.push({
 				hour,
-				label: hour === 9 ? '9:30 AM' : hour === 15 ? '3:00 PM' : `${h}:00 ${ampm}`,
+				label: hour === 9 ? '9:00 AM' : hour === 14 ? '2:00 PM' : `${h}:00 ${ampm}`,
 				isExamSlot,
 				slotType
 			});
@@ -312,7 +343,72 @@
 	}
 
 	let calendar = $derived(buildCalendar());
+
+	let examRange = $derived.by(() => {
+		const dates = [...new Set(allExams.map((e) => e.date))].sort(
+			(a, b) => parseDateStr(a).getTime() - parseDateStr(b).getTime()
+		);
+		return dates.length ? `${dates[0]} – ${dates[dates.length - 1]}` : "";
+	});
+
+	// The search box moves from the hero to the header after the first add;
+	// keep focus on it so people can keep typing. Skip on touch to avoid popping the keyboard.
+	$effect(() => {
+		if (searchInputRef && !importOpen && matchMedia("(pointer: fine)").matches) searchInputRef.focus();
+	});
 </script>
+
+	{#snippet searchBox(hero: boolean)}
+		<div class="search-wrap" class:hero-search={hero}>
+			<input
+				type="text"
+				class="input"
+				placeholder={hero ? "Search a course code, e.g. CSD101" : "Search course code (Press / to search)"}
+				bind:value={searchInput}
+				bind:this={searchInputRef}
+			/>
+			{#if groupedFilteredExams().length > 0}
+				<div class="dropdown">
+					{#each groupedFilteredExams() as [courseCode, exams]}
+						{@const firstExam = exams[0]}
+						{@const conflicts = getConflicts(firstExam)}
+						{@const hasConflictFlag = conflicts.length > 0}
+						{@const selected = isSelected(firstExam)}
+						<div class="dropdown-item" class:dimmed={hasConflictFlag}>
+							<div class="item-info">
+								<div class="item-row">
+									<span class="mono">{courseCode}</span>
+									<span class="muted small">
+										{firstExam.day} • {firstExam.time}
+									</span>
+								</div>
+								{#if hasConflictFlag}
+									<span class="conflict-note">
+										⚠ Conflicts: {conflicts.map((c) => c.courseCode).join(", ")}
+									</span>
+								{/if}
+							</div>
+							<div class="item-action">
+								{#if selected}
+									<button class="btn small" onclick={() => removeExam(firstExam)}>
+										Remove
+									</button>
+								{:else}
+									<button
+										class="btn small"
+										onclick={() => addExam(firstExam)}
+										disabled={hasConflictFlag}
+									>
+										{hasConflictFlag ? "Conflict" : "Add"}
+									</button>
+								{/if}
+							</div>
+						</div>
+					{/each}
+				</div>
+			{/if}
+		</div>
+	{/snippet}
 
 <main class="main">
 	{#if loading}
@@ -327,64 +423,55 @@
 		</div>
 	{:else}
 		<div class="app">
+			{#if importOpen && importOffer.length > 0}
+				<div class="import-backdrop">
+					<div class="import-card" role="dialog" aria-modal="true" aria-labelledby="import-title">
+						<h2 id="import-title">Do you want to import from the timetable?</h2>
+						<p class="muted">
+							{importOffer.length} {importOffer.length === 1 ? "course" : "courses"} from your Scooby timetable
+							{selectedExams.length > 0 ? "aren't in your exam list yet" : "have an end-sem exam"}:
+						</p>
+						<div class="import-codes">
+							{#each importOffer as exam}
+								<span class="import-code">{exam.courseCode}</span>
+							{/each}
+						</div>
+						<div class="import-actions">
+							<button class="btn secondary" onclick={() => answerImport(false)}>No thanks</button>
+							<button class="btn primary" onclick={() => answerImport(true)}>Yes, import</button>
+						</div>
+					</div>
+				</div>
+			{/if}
 			<!-- Header -->
 			<header class="header">
 				<div class="header-left">
 					<h1>Scooby</h1>
-					<span class="tag">Mid-Sem Exams</span>
+					<span class="tag">End-Sem Exams</span>
 				</div>
 
-				<div class="search-wrap">
-					<input
-						type="text"
-						class="input"
-						placeholder="Search course code (Press / to search)"
-						bind:value={searchInput}
-						bind:this={searchInputRef}
-					/>
-					{#if groupedFilteredExams().length > 0}
-						<div class="dropdown">
-							{#each groupedFilteredExams() as [courseCode, exams]}
-								{@const firstExam = exams[0]}
-								{@const conflicts = getConflicts(firstExam)}
-								{@const hasConflictFlag = conflicts.length > 0}
-								{@const selected = isSelected(firstExam)}
-								<div class="dropdown-item" class:dimmed={hasConflictFlag}>
-									<div class="item-info">
-										<div class="item-row">
-											<span class="mono">{courseCode}</span>
-											<span class="muted small">
-												{firstExam.day} • {firstExam.time}
-											</span>
-										</div>
-										{#if hasConflictFlag}
-											<span class="conflict-note">
-												⚠ Conflicts: {conflicts.map((c) => c.courseCode).join(", ")}
-											</span>
-										{/if}
-									</div>
-									<div class="item-action">
-										{#if selected}
-											<button class="btn small" onclick={() => removeExam(firstExam)}>
-												Remove
-											</button>
-										{:else}
-											<button
-												class="btn small"
-												onclick={() => addExam(firstExam)}
-												disabled={hasConflictFlag}
-											>
-												{hasConflictFlag ? "Conflict" : "Add"}
-											</button>
-										{/if}
-									</div>
-								</div>
-							{/each}
-						</div>
-					{/if}
-				</div>
+				{#if selectedExams.length > 0}
+					{@render searchBox(false)}
+				{/if}
 
 				<div class="header-actions">
+					{#if importOffer.length > 0}
+						<button
+							class="btn secondary action-btn"
+							onclick={() => (importOpen = true)}
+							title="Add the courses from your Scooby timetable"
+						>
+							<span class="icon">
+								<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+									<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+									<polyline points="7 10 12 15 17 10" />
+									<line x1="12" y1="15" x2="12" y2="3" />
+								</svg>
+							</span>
+							Import from Timetable ({importOffer.length})
+						</button>
+					{/if}
+					{#if selectedExams.length > 0}
 					<button class="btn secondary action-btn" onclick={downloadImage}>
 						<span class="icon">
 							<svg
@@ -425,8 +512,11 @@
 						</span>
 						Export Calendar
 					</button>
-					<a href="/" class="btn secondary">← Timetable</a>
-					<button class="btn" onclick={reset}>Reset</button>
+					{/if}
+					<a href="/" class="btn secondary">← Home</a>
+					{#if selectedExams.length > 0}
+						<button class="btn" onclick={reset}>Reset</button>
+					{/if}
 				</div>
 			</header>
 
@@ -479,7 +569,12 @@
 				</section>
 			{:else}
 				<div class="empty-state">
-					<p class="muted">Search and add your courses to see your exam schedule</p>
+					<h2 class="hero-title">Find your end-sem exams</h2>
+					<p class="muted hero-sub">
+						Monsoon 2026 · {examRange} · {allCourseCodes().length} courses
+					</p>
+					{@render searchBox(true)}
+					<p class="hero-hint">Add each of your courses to build your schedule, then save it as an image or export it to your calendar.</p>
 				</div>
 			{/if}
 
@@ -645,6 +740,7 @@
 
 	.header-actions {
 		display: flex;
+		margin-left: auto;
 		gap: 0.5rem;
 		align-items: center;
 	}
@@ -777,9 +873,119 @@
 	.empty-state {
 		flex: 1;
 		display: flex;
+		flex-direction: column;
 		align-items: center;
 		justify-content: center;
-		padding: 4rem;
+		text-align: center;
+		gap: 0.75rem;
+		padding: 2rem 1.25rem 6rem;
+	}
+
+	.hero-title {
+		font-size: clamp(1.5rem, 4vw, 2.25rem);
+		font-weight: 700;
+		letter-spacing: -0.02em;
+		margin: 0;
+	}
+
+	.hero-sub {
+		margin: 0 0 1rem;
+		font-size: 0.9rem;
+		color: #888;
+	}
+
+	.hero-hint {
+		margin: 0.75rem 0 0;
+		max-width: 420px;
+		font-size: 0.8rem;
+		line-height: 1.5;
+		color: #555;
+	}
+
+	.search-wrap.hero-search {
+		flex: none;
+		width: 100%;
+		max-width: 560px;
+		text-align: left;
+	}
+
+	.hero-search .input {
+		padding: 1rem 1.25rem;
+		font-size: 1.05rem;
+		border-radius: 12px;
+		background: #0e0e10;
+		border-color: #2a2a2e;
+		box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+		transition: border-color 0.15s ease, box-shadow 0.15s ease;
+	}
+
+	.hero-search .input:focus {
+		border-color: #3b82f6;
+		box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.15), 0 8px 30px rgba(0, 0, 0, 0.4);
+	}
+
+	.hero-search .dropdown {
+		margin-top: 0.5rem;
+		border-radius: 12px;
+		max-height: 340px;
+	}
+
+	/* Import prompt */
+	.import-backdrop {
+		position: fixed;
+		inset: 0;
+		z-index: 200;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1.25rem;
+		background: rgba(0, 0, 0, 0.6);
+		backdrop-filter: blur(4px);
+	}
+
+	.import-card {
+		width: 100%;
+		max-width: 440px;
+		background: #0e0e10;
+		border: 1px solid #2a2a2e;
+		border-radius: 14px;
+		padding: 1.5rem;
+		box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+	}
+
+	.import-card h2 {
+		font-size: 1.1rem;
+		margin: 0 0 0.5rem;
+	}
+
+	.import-card p {
+		margin: 0 0 1rem;
+		font-size: 0.85rem;
+		color: #888;
+	}
+
+	.import-codes {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+		max-height: 160px;
+		overflow-y: auto;
+		margin-bottom: 1.25rem;
+	}
+
+	.import-code {
+		font-family: "SF Mono", Monaco, monospace;
+		font-size: 0.75rem;
+		padding: 4px 8px;
+		background: #18181b;
+		border: 1px solid #2a2a2e;
+		border-radius: 6px;
+	}
+
+	.import-actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
 	}
 
 	/* Lists */

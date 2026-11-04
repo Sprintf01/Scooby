@@ -57,15 +57,14 @@
 			icon: "minor",
 			tag: "Academics",
 		},
-		// No exam schedule is live — /exam shows the empty state.
-		// {
-		// 	title: "Exam Timetable",
-		// 	description:
-		// 		"Search your courses and build your personal mid-sem or end-sem exam schedule. Export it as an image or to your calendar.",
-		// 	href: "/exam",
-		// 	icon: "exam",
-		// 	tag: "Exams",
-		// },
+		{
+			title: "Exam Timetable",
+			description:
+				"Search your courses and build your personal end-sem exam schedule. Export it as an image or to your calendar.",
+			href: "/exam",
+			icon: "exam",
+			tag: "Exams",
+		},
 		{
 			title: "GPA Calculator",
 			description:

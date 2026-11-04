@@ -3,7 +3,7 @@
 	import Seo from "$lib/components/Seo.svelte";
 
 	// Flip to true when a mid-sem / end-sem exam schedule is live.
-	const examActive = false;
+	const examActive = true;
 </script>
 
 <Seo
