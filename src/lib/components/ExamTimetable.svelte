@@ -446,7 +446,7 @@
 			<!-- Header -->
 			<header class="header">
 				<div class="header-left">
-					<h1>Scooby</h1>
+					<a href="/" class="home-link" title="Back to Scooby home"><h1>Scooby</h1></a>
 					<span class="tag">End-Sem Exams</span>
 				</div>
 
@@ -669,6 +669,16 @@
 		display: flex;
 		align-items: center;
 		gap: 1rem;
+	}
+
+	.home-link {
+		text-decoration: none;
+		color: inherit;
+		transition: opacity 0.15s;
+	}
+
+	.home-link:hover {
+		opacity: 0.7;
 	}
 
 	.header h1 {
